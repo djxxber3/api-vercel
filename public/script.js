@@ -29,7 +29,7 @@ const api = {
 const App = () => {
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [loading, setLoading] = useState(true);
-    const [matches, setMatches] = useState(null); // Use null to indicate not yet loaded
+    const [matches, setMatches] = useState(null);
     const [channels, setChannels] = useState([]);
     const [currentDate, setCurrentDate] = useState(new Date().toISOString().slice(0, 10));
     const [modal, setModal] = useState({ type: null, data: null });
@@ -37,7 +37,7 @@ const App = () => {
     const handleLogout = () => {
         sessionStorage.removeItem('adminPasskey');
         setIsAuthenticated(false);
-        setMatches(null); // Clear data on logout
+        setMatches(null);
     };
 
     const handleLogin = (passkey) => {
@@ -45,19 +45,16 @@ const App = () => {
         setIsAuthenticated(true);
     };
     
-    // Check session on initial load
     useEffect(() => {
         if (sessionStorage.getItem('adminPasskey')) {
             setIsAuthenticated(true);
         } else {
-            setLoading(false); // Only stop loading if not authenticated
+            setLoading(false);
         }
     }, []);
 
-    // Fetch data when authenticated
     const fetchData = useCallback(async () => {
         if (!isAuthenticated) return;
-        
         setLoading(true);
         try {
             const [matchesData, channelsData] = await Promise.all([
@@ -68,11 +65,11 @@ const App = () => {
             setChannels(channelsData);
         } catch (err) {
             if (err.message === 'Unauthorized') {
-                alert("جلسة غير صالحة أو كلمة مرور خاطئة. يتم تسجيل الخروج.");
+                alert("جلسة غير صالحة. يتم تسجيل الخروج.");
                 handleLogout();
             } else {
                 alert("خطأ في جلب البيانات: " + err.message);
-                setMatches([]); // Set to empty array on error to stop loading spinner
+                setMatches([]);
             }
         } finally {
             setLoading(false);
@@ -109,7 +106,6 @@ const App = () => {
         return <LoginScreen onLogin={handleLogin} />;
     }
 
-    // This handles the initial loading state correctly
     if (loading || matches === null) {
         return (
             <div className="flex items-center justify-center min-h-screen">
@@ -145,6 +141,8 @@ const App = () => {
     );
 };
 
+// --- Child Components ---
+
 const LoginScreen = ({ onLogin }) => {
     const [passkey, setPasskey] = useState('');
     const [error, setError] = useState('');
@@ -167,7 +165,6 @@ const LoginScreen = ({ onLogin }) => {
             setLoading(false);
         }
     };
-    // ... (rest of the component is the same)
     return (
         <div className="flex items-center justify-center min-h-screen">
             <form onSubmit={handleSubmit} className="w-full max-w-sm p-8 space-y-6 bg-gray-800 rounded-lg shadow-xl">
@@ -187,11 +184,6 @@ const LoginScreen = ({ onLogin }) => {
     );
 };
 
-// --- Child Components ---
-// All other child components (Header, DateNavigator, MatchRow, Modals, etc.) are perfect
-// and do not need to be changed from the previous version. Make sure they are present in your file.
-// For brevity, I am not re-pasting all of them, but the MatchRow is below.
-
 const Header = ({ onManageChannels, onForceSync, onLogout }) => (
     <header className="flex items-center justify-between py-4">
         <div className="flex items-center gap-2"><i className="fas fa-shield-halved text-3xl text-blue-400"></i><h1 className="text-3xl font-black">Admin Panel</h1></div>
@@ -202,6 +194,7 @@ const Header = ({ onManageChannels, onForceSync, onLogout }) => (
         </div>
     </header>
 );
+
 const DateNavigator = ({ currentDate, changeDate }) => {
     const formatDate = (dateString) => new Date(dateString).toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' });
     const isToday = new Date(currentDate).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10);
@@ -216,6 +209,7 @@ const DateNavigator = ({ currentDate, changeDate }) => {
         </div>
     );
 };
+
 const MatchRow = ({ match, onLinkClick }) => {
     const isLive = ['1H', 'HT', '2H', 'ET', 'P'].includes(match.status);
     const hasEnded = ['FT', 'AET', 'PEN'].includes(match.status);
@@ -228,7 +222,171 @@ const MatchRow = ({ match, onLinkClick }) => {
         </div>
     );
 };
-// Paste the modal components (LinkChannelsModal, ManageChannelsModal, etc.) from the previous correct version here.
-// They do not need any changes.
+
+// --- ALL MODAL COMPONENTS ARE INCLUDED HERE ---
+
+const LinkChannelsModal = ({ match, channels, onClose, onComplete }) => {
+    const [selectedIds, setSelectedIds] = useState(match.broadcastChannels || []);
+    const [loading, setLoading] = useState(false);
+    const groupedChannels = useMemo(() => channels.reduce((acc, ch) => {
+        if (!acc[ch.category]) acc[ch.category] = [];
+        acc[ch.category].push(ch);
+        return acc;
+    }, {}), [channels]);
+
+    const handleSave = async () => {
+        setLoading(true);
+        try {
+            await api.call('/api/link', 'POST', { matchId: match.matchId, channelIds: selectedIds });
+            onComplete(); 
+            onClose();
+        } catch (err) { 
+            alert('Error: ' + err.message); 
+        } finally { 
+            setLoading(false); 
+        }
+    };
+    
+    return (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50" onClick={onClose}>
+            <div className="w-full max-w-2xl bg-gray-800 rounded-lg shadow-xl flex flex-col" onClick={e => e.stopPropagation()}>
+                <header className="p-4 border-b border-gray-700">
+                    <h2 className="text-xl font-bold">ربط القنوات</h2>
+                    <p className="text-sm text-gray-400">{match.homeTeam.name} vs {match.awayTeam.name}</p>
+                </header>
+                <div className="p-6 max-h-[60vh] overflow-y-auto space-y-4">
+                    {Object.keys(groupedChannels).length === 0 ? (
+                        <p className="text-center text-gray-400">لا توجد قنوات. أضف قناة أولاً.</p>
+                    ) : Object.entries(groupedChannels).map(([category, chs]) => (
+                        <div key={category}>
+                            <h3 className="font-bold text-blue-400 mb-2">{category}</h3>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {chs.map(ch => (
+                                    <label key={ch.id} className={`flex items-center gap-3 p-3 rounded-md cursor-pointer transition-colors ${selectedIds.includes(ch.id) ? 'bg-blue-600/50 ring-2 ring-blue-500' : 'bg-gray-700/50 hover:bg-gray-700'}`}>
+                                        <input type="checkbox" checked={selectedIds.includes(ch.id)} onChange={() => setSelectedIds(p => p.includes(ch.id) ? p.filter(i => i !== ch.id) : [...p, ch.id])} className="w-5 h-5 accent-blue-500" />
+                                        <img src={ch.logo} alt={ch.name} className="w-8 h-8 rounded-md channel-logo" />
+                                        <span className="font-semibold">{ch.name}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+                <footer className="p-4 flex justify-end gap-3 bg-gray-900/50 border-t border-gray-700">
+                    <button onClick={onClose} className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded-md">إلغاء</button>
+                    <button onClick={handleSave} disabled={loading} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-md disabled:opacity-50">
+                        {loading ? 'جاري الحفظ...' : 'حفظ'}
+                    </button>
+                </footer>
+            </div>
+        </div>
+    );
+};
+
+const ManageChannelsModal = ({ channels, onClose, onChannelUpdate, onChannelAdd, onChannelDelete }) => {
+    const [mode, setMode] = useState('list');
+    const [selectedChannel, setSelectedChannel] = useState(null);
+    const handleEditClick = (channel) => { setSelectedChannel(channel); setMode('edit'); };
+    const handleBackToList = () => { setMode('list'); setSelectedChannel(null); };
+
+    return (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50" onClick={onClose}>
+            <div className="w-full max-w-4xl bg-gray-800 rounded-lg shadow-xl flex flex-col" onClick={e => e.stopPropagation()}>
+                <header className="p-4 flex justify-between items-center border-b border-gray-700">
+                    <h2 className="text-xl font-bold">إدارة القنوات</h2>
+                    {mode === 'list' ? (
+                        <button onClick={() => setMode('add')} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-md"><i className="fas fa-plus mr-2"></i>إضافة قناة</button>
+                    ) : (
+                        <button onClick={handleBackToList} className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded-md"><i className="fas fa-arrow-left mr-2"></i>عودة</button>
+                    )}
+                </header>
+                <div className="p-6 max-h-[70vh] overflow-y-auto">
+                    {mode === 'list' && <ChannelList channels={channels} onEdit={handleEditClick} onDelete={onChannelDelete} />}
+                    {mode === 'add' && <ChannelForm onComplete={(newChannel) => { onChannelAdd(newChannel); handleBackToList(); }} />}
+                    {mode === 'edit' && <ChannelForm channel={selectedChannel} onComplete={(updatedChannel) => { onChannelUpdate(updatedChannel); handleBackToList(); }} />}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const ChannelList = ({ channels, onEdit, onDelete }) => {
+    const handleDelete = async (channelId) => {
+        if (!confirm('هل أنت متأكد؟')) return;
+        try { 
+            await api.call(`/api/channels/${channelId}`, 'DELETE'); 
+            onDelete(channelId); 
+        } catch(err) { 
+            alert("خطأ: " + err.message); 
+        }
+    };
+    return (
+        <div className="space-y-3">
+            {channels.length === 0 ? (
+                <p className="text-center text-gray-400">لا توجد قنوات. أضف قناة جديدة.</p>
+            ) : channels.map(ch => (
+                <div key={ch.id} className="flex items-center gap-4 p-3 bg-gray-700/50 rounded-md">
+                    <img src={ch.logo} alt={ch.name} className="w-10 h-10 rounded-md channel-logo"/>
+                    <div className="flex-1">
+                        <p className="font-bold">{ch.name}</p>
+                        <p className="text-xs text-gray-400">{ch.category} - {ch.urls.length} رابط</p>
+                    </div>
+                    <button onClick={() => onEdit(ch)} className="text-blue-400 hover:text-blue-300 px-3"><i className="fas fa-edit"></i></button>
+                    <button onClick={() => handleDelete(ch.id)} className="text-red-500 hover:text-red-400 px-3"><i className="fas fa-trash"></i></button>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+const ChannelForm = ({ channel = null, onComplete }) => {
+    const isEditMode = !!channel;
+    const [formData, setFormData] = useState({ name: channel?.name || '', category: channel?.category || '', logo: channel?.logo || '', urls: channel?.urls || [{ url: '', quality: 'HD' }] });
+    const [loading, setLoading] = useState(false);
+    const handleChange = (e) => setFormData(p => ({...p, [e.target.name]: e.target.value}));
+    const handleUrlChange = (index, field, value) => { const urls = [...formData.urls]; urls[index][field] = value; setFormData(p => ({...p, urls})); };
+    const addUrlField = () => setFormData(p => ({ ...p, urls: [...p.urls, { url: '', quality: 'HD' }] }));
+    const removeUrlField = index => setFormData(p => ({ ...p, urls: p.urls.filter((_, i) => i !== index) }));
+    
+    const handleSubmit = async (e) => {
+        e.preventDefault(); 
+        setLoading(true);
+        try { 
+            const result = isEditMode 
+                ? await api.call(`/api/channels/${channel.id}`, 'PUT', formData) 
+                : await api.call('/api/channels', 'POST', formData); 
+            onComplete(result); 
+        } catch(err) { 
+            alert("خطأ: " + err.message); 
+        } finally { 
+            setLoading(false); 
+        }
+    };
+
+    return (
+        <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div><label className="text-sm">اسم القناة</label><input type="text" name="name" value={formData.name} onChange={handleChange} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" /></div>
+                <div><label className="text-sm">الفئة</label><input type="text" name="category" value={formData.category} onChange={handleChange} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" /></div>
+                <div><label className="text-sm">رابط اللوجو</label><input type="url" name="logo" value={formData.logo} onChange={handleChange} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" /></div>
+            </div>
+            <h3 className="text-lg font-semibold pt-4 border-t border-gray-700">روابط البث</h3>
+            {formData.urls.map((item, index) => (
+                <div key={index} className="flex items-end gap-2">
+                    <div className="flex-1"><label className="text-sm">الرابط</label><input type="url" value={item.url} onChange={e => handleUrlChange(index, 'url', e.target.value)} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" /></div>
+                    <div><label className="text-sm">الجودة</label><select value={item.quality} onChange={e => handleUrlChange(index, 'quality', e.target.value)} className="w-full mt-1 p-2 bg-gray-700 rounded-md"><option>HD</option><option>FHD</option><option>4K</option><option>SD</option><option>Multi</option></select></div>
+                    <button type="button" onClick={() => removeUrlField(index)} disabled={formData.urls.length <= 1} className="p-2 h-10 bg-red-600/50 hover:bg-red-600 rounded-md disabled:opacity-50"><i className="fas fa-times"></i></button>
+                </div>
+            ))}
+            <button type="button" onClick={addUrlField} className="text-blue-400 hover:text-blue-300">+ إضافة رابط آخر</button>
+            <footer className="pt-4 flex justify-end">
+                <button type="submit" disabled={loading} className="px-6 py-2 bg-green-600 hover:bg-green-500 rounded-md disabled:opacity-50">
+                    {loading ? '...' : (isEditMode ? 'حفظ التعديلات' : 'إضافة القناة')}
+                </button>
+            </footer>
+        </form>
+    );
+};
+
 
 ReactDOM.render(<App />, document.getElementById('root'));
