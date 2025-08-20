@@ -1,0 +1,15 @@
+{
+  "name": "football-app-express",
+  "version": "1.0.0",
+  "description": "Football app backend using Express.js for Vercel deployment.",
+  "main": "api/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node api/index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.44.2",
+    "express": "^4.19.2",
+    "node-fetch": "^3.3.2"
+  }
+}
