@@ -1,28 +1,8 @@
 {
   "rewrites": [
     {
-      "source": "/api/matches",
-      "destination": "/api"
-    },
-    {
-      "source": "/api/matches(.*)",
-      "destination": "/api"
-    },
-    {
-      "source": "/api/channels",
-      "destination": "/api"
-    },
-    {
-      "source": "/api/channels(.*)",
-      "destination": "/api"
-    },
-    {
-      "source": "/api/link",
-      "destination": "/api"
-    },
-    {
-      "source": "/api/sync",
-      "destination": "/api"
+      "source": "/api/:path*",
+      "destination": "/api/index.js"
     }
   ]
 }
