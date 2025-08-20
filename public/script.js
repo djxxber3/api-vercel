@@ -1,5 +1,4 @@
-.urls.map((item, index) => (
-                <div key={indeconst { useState, useEffect, useMemo, useCallback } = React;
+const { useState, useEffect, useMemo, useCallback } = React;
 
 // --- Helper for API calls ---
 const api = {
@@ -358,4 +357,4 @@ const ChannelForm = ({ channel = null, onComplete }) => {
     );
 };
 
-ReactDOM.render(<App />, document.getElementById('root'));x}
+ReactDOM.render(<App />, document.getElementById('root'));
