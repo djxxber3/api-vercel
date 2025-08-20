@@ -1,109 +1,104 @@
 const { useState, useEffect, useMemo, useCallback } = React;
 
+// --- Helper Functions & Components ---
+const api = {
+    async call(endpoint, method = 'GET', body = null) {
+        const token = sessionStorage.getItem('authToken');
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        };
+        const options = { method, headers };
+        if (body) options.body = JSON.stringify(body);
+
+        const response = await fetch(endpoint, options);
+        if (response.status === 401 || response.status === 403) {
+            throw new Error('Unauthorized');
+        }
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'An API error occurred');
+        }
+        return response.json();
+    }
+};
+
 const App = () => {
-    // State management
+    // State
     const [isAuthenticated, setIsAuthenticated] = useState(false);
-    const [passkey, setPasskey] = useState('');
-    const [error, setError] = useState('');
     const [loading, setLoading] = useState(true);
-    
     const [matches, setMatches] = useState([]);
     const [channels, setChannels] = useState([]);
     const [currentDate, setCurrentDate] = useState(new Date().toISOString().slice(0, 10));
+    const [modal, setModal] = useState({ type: null, data: null });
 
-    const [modal, setModal] = useState({ type: null, data: null }); // type: 'link' | 'channels'
-
-    // --- Authentication ---
+    // --- Auth ---
     const handleLogout = () => {
-        sessionStorage.removeItem('adminPasskey');
+        sessionStorage.removeItem('authToken');
         setIsAuthenticated(false);
-        setPasskey('');
     };
-    
+
+    const handleLogin = (token) => {
+        sessionStorage.setItem('authToken', token);
+        setIsAuthenticated(true);
+    };
+
     useEffect(() => {
-        const storedPasskey = sessionStorage.getItem('adminPasskey');
-        if (storedPasskey) {
-            setPasskey(storedPasskey);
+        const token = sessionStorage.getItem('authToken');
+        if (token) {
             setIsAuthenticated(true);
         } else {
             setLoading(false);
         }
     }, []);
 
-    const handleLogin = (e) => {
-        e.preventDefault();
-        if (passkey) {
-            sessionStorage.setItem('adminPasskey', passkey);
-            setIsAuthenticated(true);
-            setError('');
-        } else {
-            setError('كلمة المرور مطلوبة.');
-        }
-    };
-    
     // --- Data Fetching ---
     const fetchData = useCallback(async () => {
         if (!isAuthenticated) return;
         setLoading(true);
         try {
-            const apiHeaders = { 'X-Admin-Passkey': passkey };
-            const [matchesRes, channelsRes] = await Promise.all([
-                fetch('/api/matches', { headers: apiHeaders }),
-                fetch('/api/channels', { headers: apiHeaders })
+            const [matchesData, channelsData] = await Promise.all([
+                api.call('/api/matches'),
+                api.call('/api/channels')
             ]);
-            
-            // If unauthorized, log out automatically
-            if (matchesRes.status === 401 || channelsRes.status === 401) {
-                alert('فشل التحقق! يتم تسجيل خروجك. تأكد من صحة كلمة المرور.');
-                handleLogout();
-                return;
-            }
-            
-            if (!matchesRes.ok || !channelsRes.ok) throw new Error('فشل في جلب البيانات.');
-            
-            const matchesData = await matchesRes.json();
-            const channelsData = await channelsRes.json();
-            
             setMatches(matchesData);
             setChannels(channelsData);
         } catch (err) {
-            setError(err.message);
+            if (err.message === 'Unauthorized') handleLogout();
+            else alert("خطأ في جلب البيانات: " + err.message);
         } finally {
             setLoading(false);
         }
-    }, [isAuthenticated, passkey]);
+    }, [isAuthenticated]);
 
     useEffect(() => {
         fetchData();
-    }, [fetchData]);
+    }, [isAuthenticated]);
 
     const handleForceSync = async () => {
-        if (!confirm('هل أنت متأكد من رغبتك في تحديث بيانات المباريات؟')) return;
-        setLoading(true);
+        if (!confirm('هل أنت متأكد؟ هذا الإجراء قد يستهلك موارد إضافية.')) return;
         try {
-            const res = await fetch('/api/sync', {
-                method: 'POST',
-                headers: { 'X-Admin-Passkey': passkey }
-            });
-
-            if (res.status === 401) {
-                alert('فشل التحقق! يتم تسجيل خروجك.');
-                handleLogout();
-                return;
-            }
-
-            const result = await res.json();
-            if (!res.ok) throw new Error(result.error || 'فشل التحديث.');
+            const result = await api.call('/api/sync', 'POST');
             alert(result.message);
             fetchData();
         } catch (err) {
-            alert("خطأ: " + err.message);
-        } finally {
-            setLoading(false);
+            if (err.message === 'Unauthorized') handleLogout();
+            else alert("خطأ في المزامنة: " + err.message);
         }
     };
+    
+    // --- State Updaters passed to modals ---
+    const onChannelUpdate = (updatedChannel) => {
+        setChannels(prev => prev.map(ch => ch.id === updatedChannel.id ? updatedChannel : ch));
+    };
+    const onChannelAdd = (newChannel) => {
+        setChannels(prev => [...prev, newChannel].sort((a, b) => a.name.localeCompare(b.name)));
+    };
+    const onChannelDelete = (channelId) => {
+        setChannels(prev => prev.filter(ch => ch.id !== channelId));
+    };
 
-    // --- Date and Match Filtering ---
+    // --- UI Logic ---
     const changeDate = (days) => {
         const newDate = new Date(currentDate);
         newDate.setDate(newDate.getDate() + days);
@@ -111,92 +106,37 @@ const App = () => {
     };
 
     const groupedMatches = useMemo(() => {
+        if (!matches) return {};
         return matches
             .filter(match => match.matchDate === currentDate)
             .reduce((acc, match) => {
                 const league = match.competition.name;
-                if (!acc[league]) {
-                    acc[league] = { logo: match.competition.logo, country: match.competition.country, matches: [] };
-                }
+                if (!acc[league]) acc[league] = { logo: match.competition.logo, country: match.competition.country, matches: [] };
                 acc[league].matches.push(match);
                 return acc;
             }, {});
     }, [matches, currentDate]);
-    
-    const formatDate = (dateString) => new Date(dateString).toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-
-    // --- Render Components ---
 
     if (!isAuthenticated) {
-        return (
-            <div className="flex items-center justify-center min-h-screen">
-                <form onSubmit={handleLogin} className="w-full max-w-sm p-8 space-y-6 bg-gray-800 rounded-lg shadow-xl">
-                    <h1 className="text-3xl font-bold text-center text-white">لوحة التحكم</h1>
-                    <div>
-                        <label htmlFor="passkey" className="text-sm font-medium text-gray-300">كلمة المرور</label>
-                        <input
-                            id="passkey"
-                            type="password"
-                            value={passkey}
-                            onChange={(e) => setPasskey(e.target.value)}
-                            className="w-full px-3 py-2 mt-1 text-white bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="********"
-                        />
-                    </div>
-                    {error && <p className="text-sm text-red-400">{error}</p>}
-                    <button type="submit" className="w-full py-2 font-bold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors">
-                        دخول
-                    </button>
-                </form>
-            </div>
-        );
+        return <LoginScreen onLogin={handleLogin} />;
     }
 
     return (
         <div className="max-w-4xl mx-auto p-4">
-            {/* Header */}
-            <header className="flex items-center justify-between py-4">
-                 <div className="flex items-center gap-2">
-                    <i className="fas fa-shield-halved text-3xl text-blue-400"></i>
-                    <h1 className="text-3xl font-black">Admin Panel</h1>
-                </div>
-                <div className="flex items-center gap-4">
-                    <button onClick={() => setModal({ type: 'channels', data: null })} title="إدارة القنوات" className="text-gray-400 hover:text-white transition-colors"><i className="fas fa-broadcast-tower text-2xl"></i></button>
-                    <button onClick={handleForceSync} title="تحديث قسري" className="text-gray-400 hover:text-white transition-colors"><i className="fas fa-sync-alt text-2xl"></i></button>
-                    <button onClick={handleLogout} title="تسجيل الخروج" className="text-gray-400 hover:text-white transition-colors"><i className="fas fa-sign-out-alt text-2xl"></i></button>
-                </div>
-            </header>
+            <Header onManageChannels={() => setModal({ type: 'channels' })} onForceSync={handleForceSync} onLogout={handleLogout} />
+            <DateNavigator currentDate={currentDate} changeDate={changeDate} />
             
-            {/* Date Navigator */}
-            <div className="flex items-center justify-between p-3 my-4 bg-gray-800 rounded-lg">
-                <button onClick={() => changeDate(-1)} className="px-4 py-2 hover:bg-gray-700 rounded-md"><i className="fas fa-chevron-left"></i></button>
-                <div className="text-center">
-                    <h2 className="text-lg font-bold">{formatDate(currentDate)}</h2>
-                    <p className="text-sm text-gray-400">
-                        {new Date(currentDate).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10) ? 'اليوم' : ''}
-                    </p>
-                </div>
-                <button onClick={() => changeDate(1)} className="px-4 py-2 hover:bg-gray-700 rounded-md"><i className="fas fa-chevron-right"></i></button>
-            </div>
-            
-            {/* Matches List */}
             <main>
                 {loading ? (
                      <div className="text-center py-20"><i className="fas fa-spinner fa-spin text-4xl text-gray-500"></i></div>
                 ) : Object.keys(groupedMatches).length === 0 ? (
-                    <div className="text-center py-20 text-gray-500">
-                        <i className="fas fa-calendar-times text-5xl mb-4"></i>
-                        <p>لا توجد مباريات في هذا اليوم.</p>
-                    </div>
+                    <div className="text-center py-20 text-gray-500"><i className="fas fa-calendar-times text-5xl mb-4"></i><p>لا توجد مباريات في هذا اليوم.</p></div>
                 ) : (
                     Object.entries(groupedMatches).map(([league, data]) => (
                         <div key={league} className="mb-6">
                             <div className="flex items-center gap-3 p-3 bg-gray-800 rounded-t-lg">
                                 <img src={data.logo} alt={league} className="w-6 h-6 object-contain"/>
-                                <div>
-                                    <h3 className="font-bold">{league}</h3>
-                                    <p className="text-xs text-gray-400">{data.country}</p>
-                                </div>
+                                <div><h3 className="font-bold">{league}</h3><p className="text-xs text-gray-400">{data.country}</p></div>
                             </div>
                             <div className="space-y-1">
                                 {data.matches.map(match => <MatchRow key={match.matchId} match={match} onLinkClick={() => setModal({ type: 'link', data: match })} />)}
@@ -206,58 +146,111 @@ const App = () => {
                 )}
             </main>
 
-            {/* Modals */}
-            {modal.type === 'link' && <LinkChannelsModal match={modal.data} channels={channels} passkey={passkey} onClose={() => setModal({type: null, data: null})} onComplete={fetchData} />}
-            {modal.type === 'channels' && <ManageChannelsModal channels={channels} passkey={passkey} onClose={() => setModal({type: null, data: null})} onComplete={fetchData} handleLogout={handleLogout} />}
+            {modal.type === 'link' && <LinkChannelsModal match={modal.data} channels={channels} onClose={() => setModal({ type: null })} onComplete={fetchData} />}
+            {modal.type === 'channels' && <ManageChannelsModal channels={channels} onClose={() => setModal({ type: null })} onChannelUpdate={onChannelUpdate} onChannelAdd={onChannelAdd} onChannelDelete={onChannelDelete} />}
+        </div>
+    );
+};
+
+
+// --- Components ---
+
+const LoginScreen = ({ onLogin }) => {
+    const [passkey, setPasskey] = useState('');
+    const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setError('');
+        try {
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ passkey })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error);
+            onLogin(data.token);
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="flex items-center justify-center min-h-screen">
+            <form onSubmit={handleSubmit} className="w-full max-w-sm p-8 space-y-6 bg-gray-800 rounded-lg shadow-xl">
+                <h1 className="text-3xl font-bold text-center text-white">لوحة التحكم</h1>
+                <div>
+                    <label htmlFor="passkey" className="text-sm font-medium text-gray-300">كلمة المرور</label>
+                    <input id="passkey" type="password" value={passkey} onChange={(e) => setPasskey(e.target.value)}
+                        className="w-full px-3 py-2 mt-1 text-white bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="********"
+                    />
+                </div>
+                {error && <p className="text-sm text-center text-red-400">{error}</p>}
+                <button type="submit" disabled={loading} className="w-full py-2 font-bold text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50">
+                    {loading ? <i className="fas fa-spinner fa-spin"></i> : 'دخول'}
+                </button>
+            </form>
+        </div>
+    );
+};
+
+const Header = ({ onManageChannels, onForceSync, onLogout }) => (
+    <header className="flex items-center justify-between py-4">
+        <div className="flex items-center gap-2"><i className="fas fa-shield-halved text-3xl text-blue-400"></i><h1 className="text-3xl font-black">Admin Panel</h1></div>
+        <div className="flex items-center gap-4">
+            <button onClick={onManageChannels} title="إدارة القنوات" className="text-gray-400 hover:text-white transition-colors"><i className="fas fa-broadcast-tower text-2xl"></i></button>
+            <button onClick={onForceSync} title="تحديث قسري" className="text-gray-400 hover:text-white transition-colors"><i className="fas fa-sync-alt text-2xl"></i></button>
+            <button onClick={onLogout} title="تسجيل الخروج" className="text-gray-400 hover:text-white transition-colors"><i className="fas fa-sign-out-alt text-2xl"></i></button>
+        </div>
+    </header>
+);
+
+const DateNavigator = ({ currentDate, changeDate }) => {
+    const formatDate = (dateString) => new Date(dateString).toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' });
+    const isToday = new Date(currentDate).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10);
+    return (
+        <div className="flex items-center justify-between p-3 my-4 bg-gray-800 rounded-lg">
+            <button onClick={() => changeDate(-1)} className="px-4 py-2 hover:bg-gray-700 rounded-md"><i className="fas fa-chevron-left"></i></button>
+            <div className="text-center">
+                <h2 className="text-lg font-bold">{formatDate(currentDate)}</h2>
+                {isToday && <p className="text-sm text-blue-400">اليوم</p>}
+            </div>
+            <button onClick={() => changeDate(1)} className="px-4 py-2 hover:bg-gray-700 rounded-md"><i className="fas fa-chevron-right"></i></button>
         </div>
     );
 };
 
 const MatchRow = ({ match, onLinkClick }) => {
+    // ... (This component remains the same)
     const isLive = ['1H', 'HT', '2H', 'ET', 'P'].includes(match.status);
     const hasEnded = ['FT', 'AET', 'PEN'].includes(match.status);
-
     return (
         <div onClick={onLinkClick} className="flex items-center p-4 bg-gray-800/50 hover:bg-gray-800 transition-colors cursor-pointer last:rounded-b-lg">
             <div className="w-20 text-center">
-                {isLive ? (
-                    <div className="relative text-red-500 font-bold">
-                        <span className="relative z-10">Live</span>
-                        <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3 h-3 bg-red-500 rounded-full live-indicator"></span>
-                    </div>
-                ) : hasEnded ? (
-                    <span className="text-xs text-gray-400">انتهت</span>
-                ) : (
-                    <span className="font-bold">{new Date(match.kickoffTime).toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'})}</span>
-                )}
+                {isLive ? (<div className="relative font-bold text-red-500"><span className="relative z-10">Live</span><span className="absolute w-3 h-3 bg-red-500 rounded-full top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 live-indicator"></span></div>)
+                : hasEnded ? (<span className="text-xs text-gray-400">انتهت</span>)
+                : (<span className="font-bold">{new Date(match.kickoffTime).toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'})}</span>)}
             </div>
-            <div className="flex-1 flex flex-col items-center gap-2">
-                <div className="w-full flex justify-between items-center">
-                    <span className="text-right font-semibold">{match.homeTeam.name}</span>
-                    <img src={match.homeTeam.logo} alt={match.homeTeam.name} className="w-8 h-8 rounded-full team-logo"/>
-                </div>
-                 <div className="w-full flex justify-between items-center">
-                    <span className="text-right font-semibold">{match.awayTeam.name}</span>
-                    <img src={match.awayTeam.logo} alt={match.awayTeam.name} className="w-8 h-8 rounded-full team-logo"/>
-                </div>
+            <div className="flex-1 flex flex-col gap-2">
+                <div className="flex items-center justify-end gap-3"><span className="font-semibold">{match.homeTeam.name}</span><img src={match.homeTeam.logo} alt="" className="w-8 h-8 rounded-full team-logo"/></div>
+                <div className="flex items-center justify-end gap-3"><span className="font-semibold">{match.awayTeam.name}</span><img src={match.awayTeam.logo} alt="" className="w-8 h-8 rounded-full team-logo"/></div>
             </div>
-            <div className="w-20 text-center font-bold text-xl">
-                 <div>{match.homeTeam.goals ?? '-'}</div>
-                 <div>{match.awayTeam.goals ?? '-'}</div>
-            </div>
+            <div className="w-20 text-center font-bold text-xl"><div>{match.homeTeam.goals ?? '-'}</div><div>{match.awayTeam.goals ?? '-'}</div></div>
             <div className="w-10 text-center text-xl">
-                {match.broadcastChannels?.length > 0 ? (
-                    <i className="fas fa-link text-blue-400" title={`${match.broadcastChannels.length} channels linked`}></i>
-                ) : (
-                     <i className="fas fa-unlink text-gray-600" title="No channels linked"></i>
-                )}
+                {match.broadcastChannels?.length > 0 ? <i className="fas fa-link text-blue-400"></i> : <i className="fas fa-unlink text-gray-600"></i>}
             </div>
         </div>
     );
 };
 
-const LinkChannelsModal = ({ match, channels, passkey, onClose, onComplete }) => {
-    // ... (This component remains the same)
+const LinkChannelsModal = ({ match, channels, onClose, onComplete }) => {
+    // ... (This component logic is fine)
     const [selectedIds, setSelectedIds] = useState(match.broadcastChannels || []);
     const [loading, setLoading] = useState(false);
     
@@ -267,21 +260,11 @@ const LinkChannelsModal = ({ match, channels, passkey, onClose, onComplete }) =>
         return acc;
     }, {}), [channels]);
 
-    const handleToggle = (id) => {
-        setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
-    };
-
     const handleSave = async () => {
         setLoading(true);
         try {
-            const res = await fetch('/api/link', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-Admin-Passkey': passkey },
-                body: JSON.stringify({ matchId: match.matchId, channelIds: selectedIds })
-            });
-            const result = await res.json();
-            if (!res.ok) throw new Error(result.error);
-            onComplete();
+            await api.call('/api/link', 'POST', { matchId: match.matchId, channelIds: selectedIds });
+            onComplete(); // Re-fetch all data
             onClose();
         } catch (err) {
             alert('Error: ' + err.message);
@@ -289,7 +272,7 @@ const LinkChannelsModal = ({ match, channels, passkey, onClose, onComplete }) =>
             setLoading(false);
         }
     };
-    
+    // ... (JSX for this modal is the same)
     return (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 modal-enter-active" onClick={onClose}>
             <div className="w-full max-w-2xl bg-gray-800 rounded-lg shadow-xl overflow-hidden" onClick={e => e.stopPropagation()}>
@@ -304,7 +287,7 @@ const LinkChannelsModal = ({ match, channels, passkey, onClose, onComplete }) =>
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                                 {chs.map(ch => (
                                     <label key={ch.id} className={`flex items-center gap-3 p-3 rounded-md cursor-pointer transition-colors ${selectedIds.includes(ch.id) ? 'bg-blue-600/50 ring-2 ring-blue-500' : 'bg-gray-700/50 hover:bg-gray-700'}`}>
-                                        <input type="checkbox" checked={selectedIds.includes(ch.id)} onChange={() => handleToggle(ch.id)} className="w-5 h-5 accent-blue-500" />
+                                        <input type="checkbox" checked={selectedIds.includes(ch.id)} onChange={() => setSelectedIds(p => p.includes(ch.id) ? p.filter(i => i !== ch.id) : [...p, ch.id])} className="w-5 h-5 accent-blue-500" />
                                         <img src={ch.logo} alt={ch.name} className="w-8 h-8 rounded-md channel-logo" />
                                         <span className="font-semibold">{ch.name}</span>
                                     </label>
@@ -324,127 +307,123 @@ const LinkChannelsModal = ({ match, channels, passkey, onClose, onComplete }) =>
     );
 };
 
-const ManageChannelsModal = ({ channels, passkey, onClose, onComplete, handleLogout }) => {
-    // ... (This component is updated to handle logout)
-    const [view, setView] = useState('list'); // 'list' or 'add'
-    const [newChannel, setNewChannel] = useState({ name: '', category: '', logo: '', urls: [{ url: '', quality: 'HD' }] });
-    const [loading, setLoading] = useState(false);
-    
-    const addUrlField = () => setNewChannel(prev => ({ ...prev, urls: [...prev.urls, { url: '', quality: 'HD' }] }));
-    const removeUrlField = index => setNewChannel(prev => ({ ...prev, urls: prev.urls.filter((_, i) => i !== index) }));
-    const handleUrlChange = (index, field, value) => {
-        const updatedUrls = [...newChannel.urls];
-        updatedUrls[index][field] = value;
-        setNewChannel(prev => ({ ...prev, urls: updatedUrls }));
+const ManageChannelsModal = ({ channels, onClose, onChannelUpdate, onChannelAdd, onChannelDelete }) => {
+    const [mode, setMode] = useState('list'); // 'list', 'add', 'edit'
+    const [selectedChannel, setSelectedChannel] = useState(null);
+
+    const handleEditClick = (channel) => {
+        setSelectedChannel(channel);
+        setMode('edit');
     };
 
-    const handleApiCall = async (fetchPromise) => {
-        try {
-            const res = await fetchPromise;
-            if (res.status === 401) {
-                alert('فشل التحقق! يتم تسجيل خروجك.');
-                handleLogout();
-                return;
-            }
-            if (!res.ok) throw new Error((await res.json()).error);
-            onComplete();
-            return true;
-        } catch (err) {
-            alert('Error: ' + err.message);
-            return false;
-        }
-    };
-
-    const handleAddChannel = async (e) => {
-        e.preventDefault();
-        setLoading(true);
-        const success = await handleApiCall(fetch('/api/channels', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Admin-Passkey': passkey },
-            body: JSON.stringify(newChannel)
-        }));
-        if (success) {
-            setView('list');
-            setNewChannel({ name: '', category: '', logo: '', urls: [{ url: '', quality: 'HD' }] });
-        }
-        setLoading(false);
-    };
-    
-    const handleDeleteChannel = async (channelId) => {
-        if (!confirm('هل أنت متأكد من حذف هذه القناة؟')) return;
-        await handleApiCall(fetch(`/api/channels/${channelId}`, {
-            method: 'DELETE',
-            headers: { 'X-Admin-Passkey': passkey }
-        }));
+    const handleBackToList = () => {
+        setMode('list');
+        setSelectedChannel(null);
     };
 
     return (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 modal-enter-active" onClick={onClose}>
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50" onClick={onClose}>
             <div className="w-full max-w-4xl bg-gray-800 rounded-lg shadow-xl" onClick={e => e.stopPropagation()}>
                 <header className="p-4 flex justify-between items-center border-b border-gray-700">
                     <h2 className="text-xl font-bold">إدارة القنوات</h2>
-                    <button onClick={() => setView(v => v === 'list' ? 'add' : 'list')} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-md transition-colors">
-                        <i className={`fas ${view === 'list' ? 'fa-plus' : 'fa-list'} mr-2`}></i>
-                        {view === 'list' ? 'إضافة قناة' : 'عرض القنوات'}
-                    </button>
+                    {mode === 'list' ? (
+                        <button onClick={() => setMode('add')} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-md"><i className="fas fa-plus mr-2"></i>إضافة قناة</button>
+                    ) : (
+                        <button onClick={handleBackToList} className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded-md"><i className="fas fa-arrow-left mr-2"></i>عودة للقائمة</button>
+                    )}
                 </header>
 
-                {view === 'list' ? (
-                    <div className="p-6 max-h-[60vh] overflow-y-auto space-y-3">
-                        {channels.map(ch => (
-                            <div key={ch.id} className="flex items-center gap-4 p-3 bg-gray-700/50 rounded-md">
-                                <img src={ch.logo} alt={ch.name} className="w-10 h-10 rounded-md channel-logo"/>
-                                <div className="flex-1">
-                                    <p className="font-bold">{ch.name}</p>
-                                    <p className="text-xs text-gray-400">{ch.category} - {ch.urls.length} رابط</p>
-                                </div>
-                                <button onClick={() => handleDeleteChannel(ch.id)} className="text-red-500 hover:text-red-400 px-3"><i className="fas fa-trash"></i></button>
-                            </div>
-                        ))}
-                    </div>
-                ) : (
-                    <form onSubmit={handleAddChannel} className="p-6 max-h-[60vh] overflow-y-auto space-y-4">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                             <div>
-                                <label className="text-sm">اسم القناة</label>
-                                <input type="text" value={newChannel.name} onChange={e => setNewChannel(p=>({...p, name: e.target.value}))} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" />
-                            </div>
-                            <div>
-                                <label className="text-sm">الفئة</label>
-                                <input type="text" value={newChannel.category} onChange={e => setNewChannel(p=>({...p, category: e.target.value}))} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" />
-                            </div>
-                            <div>
-                                <label className="text-sm">رابط اللوجو</label>
-                                <input type="url" value={newChannel.logo} onChange={e => setNewChannel(p=>({...p, logo: e.target.value}))} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" />
-                            </div>
-                        </div>
-                        <h3 className="text-lg font-semibold pt-4 border-t border-gray-700">روابط البث</h3>
-                        {newChannel.urls.map((item, index) => (
-                            <div key={index} className="flex items-end gap-2">
-                                <div className="flex-1">
-                                    <label className="text-sm">الرابط</label>
-                                    <input type="url" value={item.url} onChange={e => handleUrlChange(index, 'url', e.target.value)} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" />
-                                </div>
-                                <div>
-                                    <label className="text-sm">الجودة</label>
-                                    <select value={item.quality} onChange={e => handleUrlChange(index, 'quality', e.target.value)} className="w-full mt-1 p-2 bg-gray-700 rounded-md">
-                                        <option>HD</option><option>FHD</option><option>4K</option><option>SD</option><option>Multi</option>
-                                    </select>
-                                </div>
-                                <button type="button" onClick={() => removeUrlField(index)} disabled={newChannel.urls.length <= 1} className="p-2 h-10 bg-red-600/50 hover:bg-red-600 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"><i className="fas fa-times"></i></button>
-                            </div>
-                        ))}
-                        <button type="button" onClick={addUrlField} className="text-blue-400 hover:text-blue-300">+ إضافة رابط آخر</button>
-                        <footer className="pt-4 flex justify-end">
-                            <button type="submit" disabled={loading} className="px-6 py-2 bg-green-600 hover:bg-green-500 rounded-md transition-colors disabled:opacity-50">
-                                {loading ? 'جاري الإضافة...' : 'إضافة القناة'}
-                            </button>
-                        </footer>
-                    </form>
-                )}
+                <div className="p-6 max-h-[70vh] overflow-y-auto">
+                    {mode === 'list' && <ChannelList channels={channels} onEdit={handleEditClick} onDelete={onChannelDelete} />}
+                    {mode === 'add' && <ChannelForm onComplete={(newChannel) => { onChannelAdd(newChannel); handleBackToList(); }} />}
+                    {mode === 'edit' && <ChannelForm channel={selectedChannel} onComplete={(updatedChannel) => { onChannelUpdate(updatedChannel); handleBackToList(); }} />}
+                </div>
             </div>
         </div>
     );
 };
+
+const ChannelList = ({ channels, onEdit, onDelete }) => {
+    const handleDelete = async (channelId) => {
+        if (!confirm('هل أنت متأكد من حذف هذه القناة؟')) return;
+        try {
+            await api.call(`/api/channels/${channelId}`, 'DELETE');
+            onDelete(channelId); // Update state in parent
+        } catch(err) {
+            alert("خطأ: " + err.message);
+        }
+    };
+    
+    return (
+        <div className="space-y-3">
+            {channels.map(ch => (
+                <div key={ch.id} className="flex items-center gap-4 p-3 bg-gray-700/50 rounded-md">
+                    <img src={ch.logo} alt={ch.name} className="w-10 h-10 rounded-md channel-logo"/>
+                    <div className="flex-1"><p className="font-bold">{ch.name}</p><p className="text-xs text-gray-400">{ch.category} - {ch.urls.length} رابط</p></div>
+                    <button onClick={() => onEdit(ch)} className="text-blue-400 hover:text-blue-300 px-3"><i className="fas fa-edit"></i></button>
+                    <button onClick={() => handleDelete(ch.id)} className="text-red-500 hover:text-red-400 px-3"><i className="fas fa-trash"></i></button>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+const ChannelForm = ({ channel = null, onComplete }) => {
+    const isEditMode = !!channel;
+    const [formData, setFormData] = useState({
+        name: channel?.name || '', category: channel?.category || '', logo: channel?.logo || '',
+        urls: channel?.urls || [{ url: '', quality: 'HD' }]
+    });
+    const [loading, setLoading] = useState(false);
+
+    const handleChange = (e) => setFormData(prev => ({...prev, [e.target.name]: e.target.value}));
+    const handleUrlChange = (index, field, value) => {
+        const newUrls = [...formData.urls];
+        newUrls[index][field] = value;
+        setFormData(prev => ({...prev, urls: newUrls}));
+    };
+    const addUrlField = () => setFormData(prev => ({ ...prev, urls: [...prev.urls, { url: '', quality: 'HD' }] }));
+    const removeUrlField = index => setFormData(prev => ({ ...prev, urls: prev.urls.filter((_, i) => i !== index) }));
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+            const result = isEditMode
+                ? await api.call(`/api/channels/${channel.id}`, 'PUT', formData)
+                : await api.call('/api/channels', 'POST', formData);
+            onComplete(result);
+        } catch(err) {
+            alert("خطأ: " + err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div><label className="text-sm">اسم القناة</label><input type="text" name="name" value={formData.name} onChange={handleChange} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" /></div>
+                <div><label className="text-sm">الفئة</label><input type="text" name="category" value={formData.category} onChange={handleChange} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" /></div>
+                <div><label className="text-sm">رابط اللوجو</label><input type="url" name="logo" value={formData.logo} onChange={handleChange} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" /></div>
+            </div>
+            <h3 className="text-lg font-semibold pt-4 border-t border-gray-700">روابط البث</h3>
+            {formData.urls.map((item, index) => (
+                <div key={index} className="flex items-end gap-2">
+                    <div className="flex-1"><label className="text-sm">الرابط</label><input type="url" value={item.url} onChange={e => handleUrlChange(index, 'url', e.target.value)} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" /></div>
+                    <div><label className="text-sm">الجودة</label><select value={item.quality} onChange={e => handleUrlChange(index, 'quality', e.target.value)} className="w-full mt-1 p-2 bg-gray-700 rounded-md"><option>HD</option><option>FHD</option><option>4K</option><option>SD</option><option>Multi</option></select></div>
+                    <button type="button" onClick={() => removeUrlField(index)} disabled={formData.urls.length <= 1} className="p-2 h-10 bg-red-600/50 hover:bg-red-600 rounded-md disabled:opacity-50"><i className="fas fa-times"></i></button>
+                </div>
+            ))}
+            <button type="button" onClick={addUrlField} className="text-blue-400 hover:text-blue-300">+ إضافة رابط آخر</button>
+            <footer className="pt-4 flex justify-end">
+                <button type="submit" disabled={loading} className="px-6 py-2 bg-green-600 hover:bg-green-500 rounded-md disabled:opacity-50">
+                    {loading ? <i className="fas fa-spinner fa-spin"></i> : (isEditMode ? 'حفظ التعديلات' : 'إضافة القناة')}
+                </button>
+            </footer>
+        </form>
+    );
+};
+
 
 ReactDOM.render(<App />, document.getElementById('root'));
