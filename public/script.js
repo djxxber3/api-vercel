@@ -14,6 +14,12 @@ const App = () => {
     const [modal, setModal] = useState({ type: null, data: null }); // type: 'link' | 'channels'
 
     // --- Authentication ---
+    const handleLogout = () => {
+        sessionStorage.removeItem('adminPasskey');
+        setIsAuthenticated(false);
+        setPasskey('');
+    };
+    
     useEffect(() => {
         const storedPasskey = sessionStorage.getItem('adminPasskey');
         if (storedPasskey) {
@@ -26,8 +32,6 @@ const App = () => {
 
     const handleLogin = (e) => {
         e.preventDefault();
-        // In a real app, you'd verify this against a backend endpoint.
-        // For this project, we trust the entered passkey and store it.
         if (passkey) {
             sessionStorage.setItem('adminPasskey', passkey);
             setIsAuthenticated(true);
@@ -42,10 +46,19 @@ const App = () => {
         if (!isAuthenticated) return;
         setLoading(true);
         try {
+            const apiHeaders = { 'X-Admin-Passkey': passkey };
             const [matchesRes, channelsRes] = await Promise.all([
-                fetch('/api/matches', { headers: { 'X-Admin-Passkey': passkey } }),
-                fetch('/api/channels', { headers: { 'X-Admin-Passkey': passkey } })
+                fetch('/api/matches', { headers: apiHeaders }),
+                fetch('/api/channels', { headers: apiHeaders })
             ]);
+            
+            // If unauthorized, log out automatically
+            if (matchesRes.status === 401 || channelsRes.status === 401) {
+                alert('فشل التحقق! يتم تسجيل خروجك. تأكد من صحة كلمة المرور.');
+                handleLogout();
+                return;
+            }
+            
             if (!matchesRes.ok || !channelsRes.ok) throw new Error('فشل في جلب البيانات.');
             
             const matchesData = await matchesRes.json();
@@ -72,12 +85,19 @@ const App = () => {
                 method: 'POST',
                 headers: { 'X-Admin-Passkey': passkey }
             });
+
+            if (res.status === 401) {
+                alert('فشل التحقق! يتم تسجيل خروجك.');
+                handleLogout();
+                return;
+            }
+
             const result = await res.json();
             if (!res.ok) throw new Error(result.error || 'فشل التحديث.');
             alert(result.message);
             fetchData();
         } catch (err) {
-            setError(err.message);
+            alert("خطأ: " + err.message);
         } finally {
             setLoading(false);
         }
@@ -104,7 +124,6 @@ const App = () => {
     }, [matches, currentDate]);
     
     const formatDate = (dateString) => new Date(dateString).toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    const formatTime = (dateString) => new Date(dateString).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
 
     // --- Render Components ---
 
@@ -144,6 +163,7 @@ const App = () => {
                 <div className="flex items-center gap-4">
                     <button onClick={() => setModal({ type: 'channels', data: null })} title="إدارة القنوات" className="text-gray-400 hover:text-white transition-colors"><i className="fas fa-broadcast-tower text-2xl"></i></button>
                     <button onClick={handleForceSync} title="تحديث قسري" className="text-gray-400 hover:text-white transition-colors"><i className="fas fa-sync-alt text-2xl"></i></button>
+                    <button onClick={handleLogout} title="تسجيل الخروج" className="text-gray-400 hover:text-white transition-colors"><i className="fas fa-sign-out-alt text-2xl"></i></button>
                 </div>
             </header>
             
@@ -188,7 +208,7 @@ const App = () => {
 
             {/* Modals */}
             {modal.type === 'link' && <LinkChannelsModal match={modal.data} channels={channels} passkey={passkey} onClose={() => setModal({type: null, data: null})} onComplete={fetchData} />}
-            {modal.type === 'channels' && <ManageChannelsModal channels={channels} passkey={passkey} onClose={() => setModal({type: null, data: null})} onComplete={fetchData} />}
+            {modal.type === 'channels' && <ManageChannelsModal channels={channels} passkey={passkey} onClose={() => setModal({type: null, data: null})} onComplete={fetchData} handleLogout={handleLogout} />}
         </div>
     );
 };
@@ -199,7 +219,6 @@ const MatchRow = ({ match, onLinkClick }) => {
 
     return (
         <div onClick={onLinkClick} className="flex items-center p-4 bg-gray-800/50 hover:bg-gray-800 transition-colors cursor-pointer last:rounded-b-lg">
-            {/* Time / Status */}
             <div className="w-20 text-center">
                 {isLive ? (
                     <div className="relative text-red-500 font-bold">
@@ -212,8 +231,6 @@ const MatchRow = ({ match, onLinkClick }) => {
                     <span className="font-bold">{new Date(match.kickoffTime).toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'})}</span>
                 )}
             </div>
-            
-            {/* Teams */}
             <div className="flex-1 flex flex-col items-center gap-2">
                 <div className="w-full flex justify-between items-center">
                     <span className="text-right font-semibold">{match.homeTeam.name}</span>
@@ -224,14 +241,10 @@ const MatchRow = ({ match, onLinkClick }) => {
                     <img src={match.awayTeam.logo} alt={match.awayTeam.name} className="w-8 h-8 rounded-full team-logo"/>
                 </div>
             </div>
-            
-            {/* Score */}
             <div className="w-20 text-center font-bold text-xl">
                  <div>{match.homeTeam.goals ?? '-'}</div>
                  <div>{match.awayTeam.goals ?? '-'}</div>
             </div>
-            
-            {/* Link Indicator */}
             <div className="w-10 text-center text-xl">
                 {match.broadcastChannels?.length > 0 ? (
                     <i className="fas fa-link text-blue-400" title={`${match.broadcastChannels.length} channels linked`}></i>
@@ -243,9 +256,8 @@ const MatchRow = ({ match, onLinkClick }) => {
     );
 };
 
-// --- Modals ---
-
 const LinkChannelsModal = ({ match, channels, passkey, onClose, onComplete }) => {
+    // ... (This component remains the same)
     const [selectedIds, setSelectedIds] = useState(match.broadcastChannels || []);
     const [loading, setLoading] = useState(false);
     
@@ -312,8 +324,8 @@ const LinkChannelsModal = ({ match, channels, passkey, onClose, onComplete }) =>
     );
 };
 
-const ManageChannelsModal = ({ channels, passkey, onClose, onComplete }) => {
-    // Component to add, view, and delete channels
+const ManageChannelsModal = ({ channels, passkey, onClose, onComplete, handleLogout }) => {
+    // ... (This component is updated to handle logout)
     const [view, setView] = useState('list'); // 'list' or 'add'
     const [newChannel, setNewChannel] = useState({ name: '', category: '', logo: '', urls: [{ url: '', quality: 'HD' }] });
     const [loading, setLoading] = useState(false);
@@ -326,39 +338,44 @@ const ManageChannelsModal = ({ channels, passkey, onClose, onComplete }) => {
         setNewChannel(prev => ({ ...prev, urls: updatedUrls }));
     };
 
+    const handleApiCall = async (fetchPromise) => {
+        try {
+            const res = await fetchPromise;
+            if (res.status === 401) {
+                alert('فشل التحقق! يتم تسجيل خروجك.');
+                handleLogout();
+                return;
+            }
+            if (!res.ok) throw new Error((await res.json()).error);
+            onComplete();
+            return true;
+        } catch (err) {
+            alert('Error: ' + err.message);
+            return false;
+        }
+    };
+
     const handleAddChannel = async (e) => {
         e.preventDefault();
         setLoading(true);
-        try {
-            const res = await fetch('/api/channels', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-Admin-Passkey': passkey },
-                body: JSON.stringify(newChannel)
-            });
-            const result = await res.json();
-            if (!res.ok) throw new Error(result.error);
-            onComplete();
+        const success = await handleApiCall(fetch('/api/channels', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Passkey': passkey },
+            body: JSON.stringify(newChannel)
+        }));
+        if (success) {
             setView('list');
             setNewChannel({ name: '', category: '', logo: '', urls: [{ url: '', quality: 'HD' }] });
-        } catch (err) {
-            alert('Error: ' + err.message);
-        } finally {
-            setLoading(false);
         }
+        setLoading(false);
     };
     
     const handleDeleteChannel = async (channelId) => {
         if (!confirm('هل أنت متأكد من حذف هذه القناة؟')) return;
-        try {
-            const res = await fetch(`/api/channels/${channelId}`, {
-                method: 'DELETE',
-                headers: { 'X-Admin-Passkey': passkey }
-            });
-            if (!res.ok) throw new Error((await res.json()).error);
-            onComplete();
-        } catch (err) {
-            alert('Error: ' + err.message);
-        }
+        await handleApiCall(fetch(`/api/channels/${channelId}`, {
+            method: 'DELETE',
+            headers: { 'X-Admin-Passkey': passkey }
+        }));
     };
 
     return (
