@@ -6,8 +6,7 @@ import fetch from 'node-fetch';
 const app = express();
 app.use(express.json());
 
-// قم بإنشاء ملف .env في المجلد الرئيسي وأضف المتغيرات البيئية فيه
-// VERCEL_URL هو متغير بيئي يتم توفيره تلقائياً بواسطة Vercel
+// Environment variables are automatically provided by Vercel or loaded from .env in development
 const VERCEL_URL = process.env.VERCEL_URL;
 const ADMIN_PANEL_PASSKEY = process.env.ADMIN_PANEL_PASSKEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -17,7 +16,7 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const supabaseAnon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// إعداد middleware لتمكين CORS والسماح بالوصول من أي مكان
+// CORS middleware to allow access from any origin
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, PUT, OPTIONS');
@@ -25,7 +24,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// Middleware للتحقق من مفتاح المرور للمسارات الحساسة
+// Middleware to check for admin passkey for sensitive routes
 const checkAdminPasskey = (req, res, next) => {
     const passkey = req.headers['x-admin-passkey'];
     if (passkey !== ADMIN_PANEL_PASSKEY) {
@@ -34,7 +33,7 @@ const checkAdminPasskey = (req, res, next) => {
     next();
 };
 
-// مسارات API
+// API Routes
 app.get('/api/matches', async (req, res) => {
     try {
         const { data, error } = await supabaseAnon.from('matches').select('*');
@@ -147,7 +146,7 @@ app.post('/api/sync', async (req, res) => {
     }
 });
 
-// هذا هو المسار الذي يخدم ملفات الواجهة الأمامية.
-// Vercel Serverless Function entry point
+// Serve static files from the 'public' directory
 app.use(express.static('public'));
+
 export default app;
