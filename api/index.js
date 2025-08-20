@@ -107,7 +107,6 @@ app.delete('/api/channels/:id', checkAdminPasskey, async (req, res) => {
     }
 });
 
-
 // POST /api/link - Admin route to link channels to a match
 app.post('/api/link', checkAdminPasskey, async (req, res) => {
     try {
