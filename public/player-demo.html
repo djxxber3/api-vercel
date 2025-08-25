@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>عرض توضيحي - نظام تبديل الروابط</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Cairo', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white">
+    <div class="max-w-4xl mx-auto p-4">
+        <h1 class="text-3xl font-bold mb-6 text-center">عرض توضيحي - نظام تبديل الروابط التلقائي</h1>
+        
+        <div class="bg-gray-800 rounded-lg p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">محاكي المشغل</h2>
+            <div id="player-area" class="bg-black rounded-lg h-64 flex items-center justify-center mb-4">
+                <div class="text-center">
+                    <i class="fas fa-play-circle text-6xl text-gray-500 mb-4"></i>
+                    <p class="text-gray-400">اختر قناة لبدء المحاكاة</p>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-4 mb-4">
+                <select id="channel-select" class="flex-1 p-2 bg-gray-700 rounded-md">
+                    <option value="">اختر قناة...</option>
+                </select>
+                <button id="start-btn" class="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-md disabled:opacity-50">
+                    <i class="fas fa-play mr-2"></i>بدء التشغيل
+                </button>
+            </div>
+            
+            <div id="current-url" class="text-sm text-gray-400 mb-2"></div>
+            <div id="player-status" class="text-sm"></div>
+        </div>
+
+        <div class="bg-gray-800 rounded-lg p-6 mb-6">
+            <h3 class="text-lg font-semibold mb-4">معلومات القناة</h3>
+            <div id="channel-info" class="space-y-2"></div>
+        </div>
+
+        <div class="bg-gray-800 rounded-lg p-6">
+            <h3 class="text-lg font-semibold mb-4">سجل الأحداث</h3>
+            <div id="log" class="bg-gray-900 rounded-lg p-4 h-32 overflow-y-auto text-sm font-mono"></div>
+            <button id="clear-log" class="mt-2 px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded-md text-sm">
+                مسح السجل
+            </button>
+        </div>
+    </div>
+
+    <script>
+        class FailoverDemo {
+            constructor() {
+                this.currentChannelId = null;
+                this.currentUrls = [];
+                this.currentUrlIndex = 0;
+                this.isPlaying = false;
+                this.adminPasskey = prompt('أدخل كلمة مرور الأدمن:') || '';
+                
+                this.init();
+            }
+
+            async init() {
+                await this.loadChannels();
+                this.setupEventListeners();
+            }
+
+            async loadChannels() {
+                try {
+                    const response = await fetch('/api/channels', {
+                        headers: { 'X-Admin-Passkey': this.adminPasskey }
+                    });
+                    const channels = await response.json();
+                    
+                    const select = document.getElementById('channel-select');
+                    select.innerHTML = '<option value="">اختر قناة...</option>';
+                    
+                    channels.forEach(channel => {
+                        const option = document.createElement('option');
+                        option.value = channel.id;
+                        option.textContent = `${channel.name} (${channel.urls?.length || 0} روابط)`;
+                        select.appendChild(option);
+                    });
+                } catch (err) {
+                    this.log('خطأ في تحميل القنوات: ' + err.message, 'error');
+                }
+            }
+
+            setupEventListeners() {
+                document.getElementById('start-btn').addEventListener('click', () => this.startPlayback());
+                document.getElementById('channel-select').addEventListener('change', (e) => this.selectChannel(e.target.value));
+                document.getElementById('clear-log').addEventListener('click', () => this.clearLog());
+            }
+
+            async selectChannel(channelId) {
+                if (!channelId) return;
+                
+                this.currentChannelId = channelId;
+                this.log(`اختيار القناة: ${channelId}`);
+                
+                try {
+                    const response = await fetch(`/api/channels/${channelId}/urls`, {
+                        headers: { 'X-Admin-Passkey': this.adminPasskey }
+                    });
+                    const data = await response.json();
+                    
+                    this.currentUrls = data.urls;
+                    this.currentUrlIndex = 0;
+                    
+                    this.displayChannelInfo(data);
+                    this.log(`تم تحميل ${data.urls.length} روابط للقناة ${data.channelName}`);
+                } catch (err) {
+                    this.log('خطأ في تحميل معلومات القناة: ' + err.message, 'error');
+                }
+            }
+
+            displayChannelInfo(data) {
+                const infoDiv = document.getElementById('channel-info');
+                infoDiv.innerHTML = `
+                    <p><strong>اسم القناة:</strong> ${data.channelName}</p>
+                    <p><strong>عدد الروابط:</strong> ${data.urls.length}</p>
+                    <div class="mt-4">
+                        <h4 class="font-semibold mb-2">الروابط مرتبة حسب الأولوية:</h4>
+                        <div class="space-y-2">
+                            ${data.urls.map((url, index) => `
+                                <div class="flex items-center gap-2 p-2 bg-gray-700 rounded text-xs">
+                                    <span class="w-6 h-6 bg-gray-600 rounded-full flex items-center justify-center font-bold">${index + 1}</span>
+                                    <span class="flex-1 truncate">${url.url}</span>
+                                    <span class="px-2 py-1 bg-blue-600 rounded">${url.quality}</span>
+                                    <span class="px-2 py-1 rounded ${url.isHealthy ? 'bg-green-600' : 'bg-red-600'}">
+                                        ${url.isHealthy ? 'صحي' : 'معطل'}
+                                    </span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            async startPlayback() {
+                if (!this.currentChannelId || this.currentUrls.length === 0) {
+                    alert('يرجى اختيار قناة أولاً');
+                    return;
+                }
+
+                this.isPlaying = true;
+                this.currentUrlIndex = 0;
+                document.getElementById('start-btn').disabled = true;
+                
+                this.log('بدء المحاكاة...', 'info');
+                await this.playCurrentUrl();
+            }
+
+            async playCurrentUrl() {
+                if (this.currentUrlIndex >= this.currentUrls.length) {
+                    this.log('انتهت جميع الروابط المتاحة!', 'error');
+                    this.stopPlayback();
+                    return;
+                }
+
+                const url = this.currentUrls[this.currentUrlIndex];
+                this.log(`محاولة تشغيل الرابط ${this.currentUrlIndex + 1}: ${url.url}`, 'info');
+                
+                document.getElementById('current-url').textContent = `الرابط الحالي: ${url.url} (${url.quality})`;
+                document.getElementById('player-status').innerHTML = `
+                    <span class="text-green-400"><i class="fas fa-play"></i> جاري التشغيل...</span>
+                `;
+
+                // محاكاة فشل الرابط بعد 3-7 ثواني (50% احتمال)
+                const failureChance = Math.random() < 0.5;
+                const delay = 3000 + Math.random() * 4000;
+
+                setTimeout(async () => {
+                    if (failureChance && this.isPlaying) {
+                        await this.handlePlaybackFailure();
+                    } else if (this.isPlaying) {
+                        this.log('التشغيل يعمل بشكل طبيعي', 'success');
+                        // محاكاة نهاية المقطع بعد 10-15 ثانية
+                        setTimeout(() => {
+                            if (this.isPlaying) {
+                                this.log('انتهى المقطع، الانتقال للرابط التالي...', 'info');
+                                this.switchToNextUrl();
+                            }
+                        }, 10000 + Math.random() * 5000);
+                    }
+                }, delay);
+            }
+
+            async handlePlaybackFailure() {
+                this.log(`فشل في الرابط ${this.currentUrlIndex + 1}: ${this.currentUrls[this.currentUrlIndex].url}`, 'error');
+                
+                document.getElementById('player-status').innerHTML = `
+                    <span class="text-red-400"><i class="fas fa-exclamation-triangle"></i> فشل في التشغيل</span>
+                `;
+
+                // إبلاغ السيرفر عن الفشل
+                try {
+                    const response = await fetch(`/api/channels/${this.currentChannelId}/report-failure`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Admin-Passkey': this.adminPasskey
+                        },
+                        body: JSON.stringify({
+                            urlIndex: this.currentUrlIndex,
+                            error: 'Player simulation failure'
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    this.log(`تم إبلاغ السيرفر عن الفشل. روابط صحية متبقية: ${result.remainingHealthyUrls}`, 'info');
+                } catch (err) {
+                    this.log('خطأ في إبلاغ السيرفر: ' + err.message, 'error');
+                }
+
+                // التبديل للرابط التالي
+                setTimeout(() => this.switchToNextUrl(), 1000);
+            }
+
+            switchToNextUrl() {
+                this.currentUrlIndex++;
+                if (this.currentUrlIndex < this.currentUrls.length) {
+                    this.log('الانتقال للرابط الاحتياطي...', 'warning');
+                    setTimeout(() => this.playCurrentUrl(), 500);
+                } else {
+                    this.log('انتهت جميع الروابط!', 'error');
+                    this.stopPlayback();
+                }
+            }
+
+            stopPlayback() {
+                this.isPlaying = false;
+                document.getElementById('start-btn').disabled = false;
+                document.getElementById('player-status').innerHTML = `
+                    <span class="text-gray-400"><i class="fas fa-stop"></i> متوقف</span>
+                `;
+                document.getElementById('current-url').textContent = '';
+            }
+
+            log(message, type = 'info') {
+                const logDiv = document.getElementById('log');
+                const timestamp = new Date().toLocaleTimeString('ar-EG');
+                const colors = {
+                    info: 'text-blue-400',
+                    success: 'text-green-400',
+                    warning: 'text-yellow-400',
+                    error: 'text-red-400'
+                };
+                
+                const logEntry = document.createElement('div');
+                logEntry.className = colors[type] || 'text-gray-400';
+                logEntry.innerHTML = `[${timestamp}] ${message}`;
+                
+                logDiv.appendChild(logEntry);
+                logDiv.scrollTop = logDiv.scrollHeight;
+            }
+
+            clearLog() {
+                document.getElementById('log').innerHTML = '';
+            }
+        }
+
+        // تشغيل العرض التوضيحي عند تحميل الصفحة
+        document.addEventListener('DOMContentLoaded', () => {
+            new FailoverDemo();
+        });
+    </script>
+</body>
+</html>

@@ -1,5 +1,6 @@
 import express from 'express';
 import { createClient } from "@supabase/supabase-js";
+import fetch from 'node-fetch';
 import { synchronizeMatchesData } from '../sync.js';
 
 const app = express();
@@ -115,6 +116,158 @@ app.post('/api/sync', async (req, res) => {
     const result = await synchronizeMatchesData();
     if (result.success) return res.status(200).json(result);
     res.status(500).json(result);
+});
+
+// GET /api/channels/:id/urls - Get URLs with failover logic for video players
+app.get('/api/channels/:id/urls', async (req, res) => {
+    try {
+        const { data: channel, error } = await supabaseAdmin
+            .from('channels')
+            .select('*')
+            .eq('id', req.params.id)
+            .single();
+        
+        if (error) return res.status(404).json({ error: 'Channel not found' });
+        
+        // Sort URLs by priority (if available) and health status
+        const sortedUrls = (channel.urls || [])
+            .map((url, index) => ({
+                ...url,
+                index,
+                priority: url.priority || index, // Use index as default priority
+                isHealthy: url.isHealthy !== false, // Default to healthy if not set
+                lastChecked: url.lastChecked || null
+            }))
+            .sort((a, b) => {
+                // Healthy URLs first, then by priority
+                if (a.isHealthy !== b.isHealthy) return b.isHealthy - a.isHealthy;
+                return a.priority - b.priority;
+            });
+        
+        res.status(200).json({
+            channelId: channel.id,
+            channelName: channel.name,
+            urls: sortedUrls
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/channels/:id/check-health - Check health status of channel URLs
+app.post('/api/channels/:id/check-health', async (req, res) => {
+    try {
+        const { data: channel, error } = await supabaseAdmin
+            .from('channels')
+            .select('*')
+            .eq('id', req.params.id)
+            .single();
+        
+        if (error) return res.status(404).json({ error: 'Channel not found' });
+        
+        // Check each URL health (simplified version - in production you'd want more sophisticated checking)
+        const updatedUrls = await Promise.all((channel.urls || []).map(async (url, index) => {
+            try {
+                // Simple HEAD request to check if URL is accessible
+                const response = await fetch(url.url, { 
+                    method: 'HEAD', 
+                    timeout: 5000,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (compatible; HealthChecker/1.0)'
+                    }
+                });
+                
+                return {
+                    ...url,
+                    isHealthy: response.ok,
+                    lastChecked: new Date().toISOString(),
+                    statusCode: response.status
+                };
+            } catch (err) {
+                return {
+                    ...url,
+                    isHealthy: false,
+                    lastChecked: new Date().toISOString(),
+                    error: err.message
+                };
+            }
+        }));
+        
+        // Update channel with health status
+        const { data: updatedChannel, error: updateError } = await supabaseAdmin
+            .from('channels')
+            .update({ urls: updatedUrls })
+            .eq('id', req.params.id)
+            .select()
+            .single();
+        
+        if (updateError) throw updateError;
+        
+        res.status(200).json({
+            message: 'Health check completed',
+            channel: updatedChannel,
+            healthySummary: {
+                total: updatedUrls.length,
+                healthy: updatedUrls.filter(u => u.isHealthy).length,
+                unhealthy: updatedUrls.filter(u => !u.isHealthy).length
+            }
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/channels/:id/report-failure - Report URL failure from video player
+app.post('/api/channels/:id/report-failure', async (req, res) => {
+    try {
+        const { urlIndex, error: urlError } = req.body;
+        
+        const { data: channel, error } = await supabaseAdmin
+            .from('channels')
+            .select('*')
+            .eq('id', req.params.id)
+            .single();
+        
+        if (error) return res.status(404).json({ error: 'Channel not found' });
+        
+        if (!channel.urls || !channel.urls[urlIndex]) {
+            return res.status(400).json({ error: 'Invalid URL index' });
+        }
+        
+        // Mark URL as unhealthy
+        const updatedUrls = [...channel.urls];
+        updatedUrls[urlIndex] = {
+            ...updatedUrls[urlIndex],
+            isHealthy: false,
+            lastChecked: new Date().toISOString(),
+            lastError: urlError || 'Player reported failure'
+        };
+        
+        // Update channel
+        const { data: updatedChannel, error: updateError } = await supabaseAdmin
+            .from('channels')
+            .update({ urls: updatedUrls })
+            .eq('id', req.params.id)
+            .select()
+            .single();
+        
+        if (updateError) throw updateError;
+        
+        // Return next available healthy URL
+        const nextHealthyUrl = updatedUrls.find((url, idx) => 
+            idx !== urlIndex && url.isHealthy !== false
+        );
+        
+        res.status(200).json({
+            message: 'Failure reported and URL marked as unhealthy',
+            nextUrl: nextHealthyUrl || null,
+            remainingHealthyUrls: updatedUrls.filter((url, idx) => 
+                idx !== urlIndex && url.isHealthy !== false
+            ).length
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // Serve static files from 'public'

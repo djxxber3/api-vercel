@@ -320,32 +320,81 @@ const ChannelList = ({ channels, onEdit, onDelete }) => {
             alert("خطأ: " + err.message); 
         }
     };
+    
+    const getHealthStatus = (urls) => {
+        if (!urls || urls.length === 0) return { healthy: 0, total: 0, status: 'none' };
+        const healthy = urls.filter(url => url.isHealthy !== false).length;
+        const total = urls.length;
+        let status = 'good';
+        if (healthy === 0) status = 'bad';
+        else if (healthy < total * 0.5) status = 'warning';
+        return { healthy, total, status };
+    };
+    
     return (
         <div className="space-y-3">
             {channels.length === 0 ? (
                 <p className="text-center text-gray-400">لا توجد قنوات. أضف قناة جديدة.</p>
-            ) : channels.map(ch => (
-                <div key={ch.id} className="flex items-center gap-4 p-3 bg-gray-700/50 rounded-md">
-                    <img src={ch.logo} alt={ch.name} className="w-10 h-10 rounded-md channel-logo"/>
-                    <div className="flex-1">
-                        <p className="font-bold">{ch.name}</p>
-                        <p className="text-xs text-gray-400">{ch.category} - {ch.urls.length} رابط</p>
+            ) : channels.map(ch => {
+                const health = getHealthStatus(ch.urls);
+                return (
+                    <div key={ch.id} className="flex items-center gap-4 p-3 bg-gray-700/50 rounded-md">
+                        <img src={ch.logo} alt={ch.name} className="w-10 h-10 rounded-md channel-logo"/>
+                        <div className="flex-1">
+                            <p className="font-bold">{ch.name}</p>
+                            <div className="flex items-center gap-3 text-xs text-gray-400">
+                                <span>{ch.category}</span>
+                                <span>{ch.urls?.length || 0} رابط</span>
+                                {health.total > 0 && (
+                                    <div className={`flex items-center gap-1 px-2 py-1 rounded-full ${
+                                        health.status === 'good' ? 'bg-green-600/30 text-green-200' :
+                                        health.status === 'warning' ? 'bg-yellow-600/30 text-yellow-200' :
+                                        'bg-red-600/30 text-red-200'
+                                    }`}>
+                                        <i className={`fas ${
+                                            health.status === 'good' ? 'fa-check-circle' :
+                                            health.status === 'warning' ? 'fa-exclamation-triangle' :
+                                            'fa-times-circle'
+                                        }`}></i>
+                                        <span>{health.healthy}/{health.total}</span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <button onClick={() => onEdit(ch)} className="text-blue-400 hover:text-blue-300 px-3" title="تحرير">
+                            <i className="fas fa-edit"></i>
+                        </button>
+                        <button onClick={() => handleDelete(ch.id)} className="text-red-500 hover:text-red-400 px-3" title="حذف">
+                            <i className="fas fa-trash"></i>
+                        </button>
                     </div>
-                    <button onClick={() => onEdit(ch)} className="text-blue-400 hover:text-blue-300 px-3"><i className="fas fa-edit"></i></button>
-                    <button onClick={() => handleDelete(ch.id)} className="text-red-500 hover:text-red-400 px-3"><i className="fas fa-trash"></i></button>
-                </div>
-            ))}
+                );
+            })}
         </div>
     );
 };
 
 const ChannelForm = ({ channel = null, onComplete }) => {
     const isEditMode = !!channel;
-    const [formData, setFormData] = useState({ name: channel?.name || '', category: channel?.category || '', logo: channel?.logo || '', urls: channel?.urls || [{ url: '', quality: 'HD' }] });
+    const [formData, setFormData] = useState({ 
+        name: channel?.name || '', 
+        category: channel?.category || '', 
+        logo: channel?.logo || '', 
+        urls: channel?.urls || [{ url: '', quality: 'HD', priority: 0, isHealthy: true }] 
+    });
     const [loading, setLoading] = useState(false);
+    const [healthChecking, setHealthChecking] = useState(false);
+    
     const handleChange = (e) => setFormData(p => ({...p, [e.target.name]: e.target.value}));
-    const handleUrlChange = (index, field, value) => { const urls = [...formData.urls]; urls[index][field] = value; setFormData(p => ({...p, urls})); };
-    const addUrlField = () => setFormData(p => ({ ...p, urls: [...p.urls, { url: '', quality: 'HD' }] }));
+    const handleUrlChange = (index, field, value) => { 
+        const urls = [...formData.urls]; 
+        urls[index][field] = field === 'priority' ? parseInt(value) || 0 : value; 
+        setFormData(p => ({...p, urls})); 
+    };
+    const addUrlField = () => setFormData(p => ({ 
+        ...p, 
+        urls: [...p.urls, { url: '', quality: 'HD', priority: p.urls.length, isHealthy: true }] 
+    }));
     const removeUrlField = index => setFormData(p => ({ ...p, urls: p.urls.filter((_, i) => i !== index) }));
     
     const handleSubmit = async (e) => {
@@ -363,6 +412,33 @@ const ChannelForm = ({ channel = null, onComplete }) => {
         }
     };
 
+    const checkUrlsHealth = async () => {
+        if (!isEditMode) return;
+        setHealthChecking(true);
+        try {
+            const result = await api.call(`/api/channels/${channel.id}/check-health`, 'POST');
+            setFormData(p => ({...p, urls: result.channel.urls}));
+            alert(`تم فحص الروابط: ${result.healthySummary.healthy}/${result.healthySummary.total} روابط تعمل بشكل طبيعي`);
+        } catch (err) {
+            alert("خطأ في فحص الروابط: " + err.message);
+        } finally {
+            setHealthChecking(false);
+        }
+    };
+
+    const moveUrl = (index, direction) => {
+        const urls = [...formData.urls];
+        const newIndex = direction === 'up' ? index - 1 : index + 1;
+        if (newIndex < 0 || newIndex >= urls.length) return;
+        
+        [urls[index], urls[newIndex]] = [urls[newIndex], urls[index]];
+        // Update priorities based on new positions
+        urls.forEach((url, idx) => {
+            url.priority = idx;
+        });
+        setFormData(p => ({...p, urls}));
+    };
+
     return (
         <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -370,12 +446,99 @@ const ChannelForm = ({ channel = null, onComplete }) => {
                 <div><label className="text-sm">الفئة</label><input type="text" name="category" value={formData.category} onChange={handleChange} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" /></div>
                 <div><label className="text-sm">رابط اللوجو</label><input type="url" name="logo" value={formData.logo} onChange={handleChange} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" /></div>
             </div>
-            <h3 className="text-lg font-semibold pt-4 border-t border-gray-700">روابط البث</h3>
+            <div className="flex items-center justify-between pt-4 border-t border-gray-700">
+                <h3 className="text-lg font-semibold">روابط البث</h3>
+                {isEditMode && (
+                    <button 
+                        type="button" 
+                        onClick={checkUrlsHealth} 
+                        disabled={healthChecking}
+                        className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-md disabled:opacity-50"
+                    >
+                        {healthChecking ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-heartbeat"></i>}
+                        {healthChecking ? ' جاري الفحص...' : ' فحص الروابط'}
+                    </button>
+                )}
+            </div>
+            <div className="text-xs text-gray-400 mb-2">
+                ترتيب الروابط حسب الأولوية (0 = أعلى أولوية). المشغل سيجرب الروابط بالترتيب عند فشل إحداها.
+            </div>
             {formData.urls.map((item, index) => (
-                <div key={index} className="flex items-end gap-2">
-                    <div className="flex-1"><label className="text-sm">الرابط</label><input type="url" value={item.url} onChange={e => handleUrlChange(index, 'url', e.target.value)} required className="w-full mt-1 p-2 bg-gray-700 rounded-md" /></div>
-                    <div><label className="text-sm">الجودة</label><select value={item.quality} onChange={e => handleUrlChange(index, 'quality', e.target.value)} className="w-full mt-1 p-2 bg-gray-700 rounded-md"><option>HD</option><option>FHD</option><option>4K</option><option>SD</option><option>Multi</option></select></div>
-                    <button type="button" onClick={() => removeUrlField(index)} disabled={formData.urls.length <= 1} className="p-2 h-10 bg-red-600/50 hover:bg-red-600 rounded-md disabled:opacity-50"><i className="fas fa-times"></i></button>
+                <div key={index} className="flex items-end gap-2 p-3 bg-gray-700/30 rounded-md">
+                    <div className="flex flex-col gap-1">
+                        <button 
+                            type="button" 
+                            onClick={() => moveUrl(index, 'up')} 
+                            disabled={index === 0}
+                            className="p-1 text-xs bg-gray-600 hover:bg-gray-500 rounded disabled:opacity-50"
+                        >
+                            <i className="fas fa-chevron-up"></i>
+                        </button>
+                        <button 
+                            type="button" 
+                            onClick={() => moveUrl(index, 'down')} 
+                            disabled={index === formData.urls.length - 1}
+                            className="p-1 text-xs bg-gray-600 hover:bg-gray-500 rounded disabled:opacity-50"
+                        >
+                            <i className="fas fa-chevron-down"></i>
+                        </button>
+                    </div>
+                    <div className="w-16">
+                        <label className="text-xs">الأولوية</label>
+                        <input 
+                            type="number" 
+                            value={item.priority || index} 
+                            onChange={e => handleUrlChange(index, 'priority', e.target.value)} 
+                            min="0"
+                            className="w-full mt-1 p-1 text-sm bg-gray-700 rounded-md" 
+                        />
+                    </div>
+                    <div className="flex-1">
+                        <label className="text-sm">الرابط</label>
+                        <input 
+                            type="url" 
+                            value={item.url} 
+                            onChange={e => handleUrlChange(index, 'url', e.target.value)} 
+                            required 
+                            className="w-full mt-1 p-2 bg-gray-700 rounded-md" 
+                        />
+                    </div>
+                    <div>
+                        <label className="text-sm">الجودة</label>
+                        <select 
+                            value={item.quality} 
+                            onChange={e => handleUrlChange(index, 'quality', e.target.value)} 
+                            className="w-full mt-1 p-2 bg-gray-700 rounded-md"
+                        >
+                            <option>HD</option>
+                            <option>FHD</option>
+                            <option>4K</option>
+                            <option>SD</option>
+                            <option>Multi</option>
+                        </select>
+                    </div>
+                    {item.isHealthy !== undefined && (
+                        <div className="text-center">
+                            <label className="text-xs">الحالة</label>
+                            <div className={`mt-1 p-2 rounded-md text-xs ${item.isHealthy ? 'bg-green-600/50 text-green-200' : 'bg-red-600/50 text-red-200'}`}>
+                                {item.isHealthy ? <i className="fas fa-check"></i> : <i className="fas fa-times"></i>}
+                                {item.isHealthy ? ' يعمل' : ' معطل'}
+                            </div>
+                            {item.lastChecked && (
+                                <div className="text-xs text-gray-500 mt-1">
+                                    {new Date(item.lastChecked).toLocaleString('ar-EG')}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    <button 
+                        type="button" 
+                        onClick={() => removeUrlField(index)} 
+                        disabled={formData.urls.length <= 1} 
+                        className="p-2 h-10 bg-red-600/50 hover:bg-red-600 rounded-md disabled:opacity-50"
+                    >
+                        <i className="fas fa-times"></i>
+                    </button>
                 </div>
             ))}
             <button type="button" onClick={addUrlField} className="text-blue-400 hover:text-blue-300">+ إضافة رابط آخر</button>
